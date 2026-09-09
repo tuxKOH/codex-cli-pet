@@ -2,6 +2,7 @@
 #include "settings.h"
 
 #include <gtk/gtk.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -19,6 +20,7 @@ typedef struct {
     GtkWidget *template_entry;
     GtkWidget *sound_entry;
     GtkWidget *audio_device_combo;
+    GtkWidget *audio_status;
     GtkWidget *active_label;
     GtkWidget *status;
 } Settings;
@@ -65,19 +67,110 @@ static void on_audio_device_changed(GtkEditable *editable, gpointer user_data) {
     save_audio(user_data);
 }
 
-static void refresh_audio_devices(Settings *settings) {
-    FILE *pipe;
+static int append_audio_device(Settings *settings, const char *name) {
+    GtkTreeModel *model = gtk_combo_box_get_model(
+        GTK_COMBO_BOX(settings->audio_device_combo));
+    GtkTreeIter iter;
+    if (!name || !*name) return 0;
+    if (gtk_tree_model_get_iter_first(model, &iter)) {
+        do {
+            gchar *existing = NULL;
+            gtk_tree_model_get(model, &iter, 0, &existing, -1);
+            if (existing && !strcmp(existing, name)) {
+                g_free(existing);
+                return 0;
+            }
+            g_free(existing);
+        } while (gtk_tree_model_iter_next(model, &iter));
+    }
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(settings->audio_device_combo), name);
+    return 1;
+}
+
+static int scan_audio_command(Settings *settings, const char *command,
+                              int mode) {
+    FILE *pipe = popen(command, "r");
     char line[1024];
-    char name[PET_CONFIG_AUDIO_DEVICE_MAX];
-    GtkWidget *entry = audio_device_entry(settings);
-    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(settings->audio_device_combo));
-    pipe = popen("pactl list short sinks 2>/dev/null", "r");
-    if (pipe) {
-        while (fgets(line, sizeof(line), pipe)) {
-            if (sscanf(line, "%*s %255s", name) == 1)
-                gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(settings->audio_device_combo), name);
+    int found = 0;
+    if (!pipe) return 0;
+    while (fgets(line, sizeof(line), pipe)) {
+        char name[PET_CONFIG_AUDIO_DEVICE_MAX];
+        char *cursor = line;
+        cursor[strcspn(cursor, "\r\n")] = '\0';
+        if (mode == 1) {
+            if (sscanf(cursor, "%*s %255s", name) == 1)
+                found += append_audio_device(settings, name);
+        } else {
+            while (*cursor && isspace((unsigned char)*cursor)) cursor++;
+            if (!strncmp(cursor, "Name:", 5)) {
+                cursor += 5;
+                while (*cursor && isspace((unsigned char)*cursor)) cursor++;
+                snprintf(name, sizeof(name), "%s", cursor);
+                found += append_audio_device(settings, name);
+            }
         }
-        pclose(pipe);
+    }
+    pclose(pipe);
+    return found;
+}
+
+static int scan_pipewire_dump(Settings *settings) {
+    FILE *pipe = popen("pw-dump 2>/dev/null", "r");
+    char line[2048];
+    char node_name[PET_CONFIG_AUDIO_DEVICE_MAX] = "";
+    int audio_sink = 0;
+    int found = 0;
+    if (!pipe) return 0;
+    while (fgets(line, sizeof(line), pipe)) {
+        char *cursor;
+        char *end;
+        if (strstr(line, "\"id\"") && !strstr(line, "\"node.name\"")) {
+            audio_sink = 0;
+            node_name[0] = '\0';
+        }
+        if (strstr(line, "\"media.class\"") && strstr(line, "Audio/Sink"))
+            audio_sink = 1;
+        cursor = strstr(line, "\"node.name\"");
+        if (cursor) {
+            cursor = strchr(cursor, ':');
+            if (cursor) {
+                cursor = strchr(cursor, '"');
+                if (cursor) {
+                    cursor++;
+                    end = strchr(cursor, '"');
+                    if (end) {
+                        size_t length = (size_t)(end - cursor);
+                        if (length >= sizeof(node_name)) length = sizeof(node_name) - 1;
+                        memcpy(node_name, cursor, length);
+                        node_name[length] = '\0';
+                    }
+                }
+            }
+        }
+        if (audio_sink && node_name[0]) {
+            found += append_audio_device(settings, node_name);
+            node_name[0] = '\0';
+        }
+    }
+    pclose(pipe);
+    return found;
+}
+
+static void refresh_audio_devices(Settings *settings) {
+    GtkWidget *entry = audio_device_entry(settings);
+    int found;
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(settings->audio_device_combo));
+    found = scan_audio_command(settings, "pactl list short sinks 2>/dev/null", 1);
+    if (!found) found = scan_audio_command(settings, "pactl list sinks 2>/dev/null", 2);
+    if (!found) found = scan_pipewire_dump(settings);
+    /* This is a valid PulseAudio/PipeWire target even when enumeration is
+     * unavailable (for example while the user audio session is starting). */
+    append_audio_device(settings, "@DEFAULT_SINK@");
+    if (settings->audio_status) {
+        if (found)
+            gtk_label_set_text(GTK_LABEL(settings->audio_status), "已找到输出设备；空值使用系统默认设备");
+        else
+            gtk_label_set_text(GTK_LABEL(settings->audio_status), "未找到可枚举设备；可手动填写 sink 名称或使用系统默认");
     }
     settings->loading = 1;
     gtk_entry_set_text(GTK_ENTRY(entry), settings->config.audio_device);
@@ -87,6 +180,15 @@ static void refresh_audio_devices(Settings *settings) {
 static void on_refresh_audio_clicked(GtkButton *button, gpointer user_data) {
     (void)button;
     refresh_audio_devices(user_data);
+}
+
+static void on_default_audio_clicked(GtkButton *button, gpointer user_data) {
+    Settings *settings = user_data;
+    (void)button;
+    settings->loading = 1;
+    gtk_entry_set_text(GTK_ENTRY(audio_device_entry(settings)), "");
+    settings->loading = 0;
+    save_audio(settings);
 }
 
 static void load_form(Settings *settings) {
@@ -275,6 +377,7 @@ static GtkWidget *build_window(Settings *settings) {
     GtkWidget *active_row;
     GtkWidget *audio_grid;
     GtkWidget *audio_refresh_button;
+    GtkWidget *audio_default_button;
     gtk_window_set_title(GTK_WINDOW(window), "Codex Pet · 气泡显示配置");
     gtk_window_set_default_size(GTK_WINDOW(window), 820, 480);
     gtk_container_set_border_width(GTK_CONTAINER(root), 14);
@@ -339,12 +442,19 @@ static GtkWidget *build_window(Settings *settings) {
                       "填写 PulseAudio/PipeWire sink 名称；留空使用系统默认设备");
     audio_refresh_button = gtk_button_new_with_label("扫描输出设备");
     gtk_grid_attach(GTK_GRID(audio_grid), audio_refresh_button, 1, 4, 1, 1);
+    audio_default_button = gtk_button_new_with_label("使用系统默认");
+    gtk_grid_attach(GTK_GRID(audio_grid), audio_default_button, 1, 5, 1, 1);
+    settings->audio_status = gtk_label_new("");
+    gtk_widget_set_halign(settings->audio_status, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(audio_page), settings->audio_status, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(audio_page), audio_grid, FALSE, FALSE, 0);
     g_signal_connect(settings->sound_entry, "changed", G_CALLBACK(on_sound_changed), settings);
     g_signal_connect(audio_device_entry(settings), "changed",
                      G_CALLBACK(on_audio_device_changed), settings);
     g_signal_connect(audio_refresh_button, "clicked",
                      G_CALLBACK(on_refresh_audio_clicked), settings);
+    g_signal_connect(audio_default_button, "clicked",
+                     G_CALLBACK(on_default_audio_clicked), settings);
     refresh_audio_devices(settings);
 
     active_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);

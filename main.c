@@ -574,39 +574,38 @@ static void play_sound(App *app) {
     if (app->sound_pid > 0) return;
     child = fork();
     if (child == 0) {
-        if (app->audio_device[0]) {
-            int audio_pipe[2];
-            pid_t decoder;
-            int decoder_status;
-            if (pipe(audio_pipe) == 0) {
-                decoder = fork();
-                if (decoder == 0) {
-                    close(audio_pipe[0]);
-                    dup2(audio_pipe[1], STDOUT_FILENO);
-                    close(audio_pipe[1]);
-                    execlp("ffmpeg", "ffmpeg", "-v", "error", "-i",
-                           app->sound_path, "-f", "wav", "-", (char *)NULL);
-                    _exit(127);
-                }
-                if (decoder > 0) {
-                    close(audio_pipe[1]);
-                    dup2(audio_pipe[0], STDIN_FILENO);
-                    close(audio_pipe[0]);
-                    execlp("paplay", "paplay", "--device", app->audio_device,
-                           "--file-format=wav", "-", (char *)NULL);
-                    waitpid(decoder, &decoder_status, 0);
-                }
+        int audio_pipe[2];
+        pid_t decoder;
+        int decoder_status;
+        if (pipe(audio_pipe) == 0) {
+            decoder = fork();
+            if (decoder == 0) {
+                close(audio_pipe[0]);
+                dup2(audio_pipe[1], STDOUT_FILENO);
+                close(audio_pipe[1]);
+                execlp("ffmpeg", "ffmpeg", "-v", "error", "-i",
+                       app->sound_path, "-f", "wav", "-", (char *)NULL);
+                _exit(127);
             }
-            _exit(127);
+            if (decoder > 0) {
+                close(audio_pipe[1]);
+                dup2(audio_pipe[0], STDIN_FILENO);
+                close(audio_pipe[0]);
+                if (app->audio_device[0])
+                    execlp("paplay", "paplay", "--device", app->audio_device,
+                           "--file-format=wav", "/dev/stdin", (char *)NULL);
+                else
+                    execlp("paplay", "paplay", "--file-format=wav",
+                           "/dev/stdin", (char *)NULL);
+                /* If PulseAudio/PipeWire is unavailable, ffplay can still
+                 * use the desktop audio backend. It consumes the same WAV
+                 * stream, so MP3 decoding stays in one reliable place. */
+                execlp("ffplay", "ffplay", "-nodisp", "-vn", "-autoexit",
+                       "-nostdin", "-loglevel", "quiet", "-i", "-",
+                       (char *)NULL);
+                waitpid(decoder, &decoder_status, 0);
+            }
         }
-        /* paplay generally cannot decode MP3 files. ffplay handles the
-         * bundled MP3 reliably; the other players remain fallbacks for a
-         * user-configured audio file. */
-        execlp("ffplay", "ffplay", "-nodisp", "-vn", "-autoexit",
-               "-nostdin", "-loglevel", "quiet", app->sound_path,
-               (char *)NULL);
-        execlp("paplay", "paplay", app->sound_path, (char *)NULL);
-        execlp("mpg123", "mpg123", "-q", app->sound_path, (char *)NULL);
         _exit(127);
     }
     if (child > 0) app->sound_pid = child;
