@@ -46,6 +46,7 @@ GUI 会写入程序目录下的 `codex-pet.json`。旧版本的 `.env` 会在找
 {
   "active": 0,
   "sound": "assets/Ya1.mp3",
+  "audio_device": "",
   "displays": [
     {
       "name": "余额",
@@ -62,7 +63,9 @@ GUI 会写入程序目录下的 `codex-pet.json`。旧版本的 `.env` 会在找
 
 显示模板支持基础运算，例如 `已使用: {$content // 1000}k`。支持 `+`、`-`、`*`、`/`、`//`、`%` 和括号；`//` 是向下取整除法。
 
-点击音效在 JSON 的全局 `sound` 字段中设置，默认是仓库内的 `assets/Ya1.mp3`。设置 GUI 也可以直接编辑这个路径，支持绝对路径、相对于程序目录的路径，以及 `~/...` 路径；留空即可关闭音效。
+音频在设置 GUI 的独立“音频设置”页面中配置，也保存在 JSON 的全局字段里：`sound` 是音效路径，默认是仓库内的 `assets/Ya1.mp3`；`audio_device` 是 PulseAudio/PipeWire 的输出 sink 名称，留空使用系统默认设备。GUI 可以扫描当前输出设备，也可以手动填写设备名。音效路径支持绝对路径、相对于程序目录的路径，以及 `~/...` 路径；留空即可关闭音效。
+
+修改 systemd 音频环境后，需要重新运行一次 `./install-systemd.sh`，再执行 `systemctl restart codex-pet`。
 
 当前实现依赖 X11 的 `_NET_CLIENT_LIST`、`_NET_ACTIVE_WINDOW` 和 `_NET_WM_PID`，以及 Cairo/X11 开发包。Wayland 会话需要后续增加对应的 compositor/桌面环境适配。
 

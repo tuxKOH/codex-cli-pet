@@ -92,6 +92,7 @@ typedef struct {
     int fetch_index;
     char fetch_path[PATH_MAX];
     char sound_path[PATH_MAX];
+    char audio_device[PET_CONFIG_AUDIO_DEVICE_MAX];
     pid_t sound_pid;
     long long press_started;
     int bubble_pressed;
@@ -495,6 +496,8 @@ static void reload_config_if_changed(App *app) {
     if (info.st_mtime != app->config_mtime) {
         int old_active = app->config.active;
         pet_config_load(&app->config, app->config_path);
+        snprintf(app->audio_device, sizeof(app->audio_device), "%s",
+                 app->config.audio_device);
         resolve_sound_path(app, app->directory);
         config_update_mtime(app);
         if (app->config.count > 0 && app->config.active != old_active) {
@@ -571,6 +574,31 @@ static void play_sound(App *app) {
     if (app->sound_pid > 0) return;
     child = fork();
     if (child == 0) {
+        if (app->audio_device[0]) {
+            int audio_pipe[2];
+            pid_t decoder;
+            int decoder_status;
+            if (pipe(audio_pipe) == 0) {
+                decoder = fork();
+                if (decoder == 0) {
+                    close(audio_pipe[0]);
+                    dup2(audio_pipe[1], STDOUT_FILENO);
+                    close(audio_pipe[1]);
+                    execlp("ffmpeg", "ffmpeg", "-v", "error", "-i",
+                           app->sound_path, "-f", "wav", "-", (char *)NULL);
+                    _exit(127);
+                }
+                if (decoder > 0) {
+                    close(audio_pipe[1]);
+                    dup2(audio_pipe[0], STDIN_FILENO);
+                    close(audio_pipe[0]);
+                    execlp("paplay", "paplay", "--device", app->audio_device,
+                           "--file-format=wav", "-", (char *)NULL);
+                    waitpid(decoder, &decoder_status, 0);
+                }
+            }
+            _exit(127);
+        }
         /* paplay generally cannot decode MP3 files. ffplay handles the
          * bundled MP3 reliably; the other players remain fallbacks for a
          * user-configured audio file. */
@@ -906,6 +934,8 @@ int main(int argc, char **argv) {
     snprintf(app.directory, sizeof(app.directory), "%s", directory);
     snprintf(app.config_path, sizeof(app.config_path), "%s/codex-pet.json", directory);
     pet_config_load(&app.config, app.config_path);
+    snprintf(app.audio_device, sizeof(app.audio_device), "%s",
+             app.config.audio_device);
     resolve_sound_path(&app, directory);
     config_update_mtime(&app);
     if (app.config.count > 0 && app.config.items[app.config.active].value[0])
