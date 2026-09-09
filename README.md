@@ -32,7 +32,8 @@ make demo
 - 宠物保存相对终端客户区的位置，终端移动时跟随。
 - 终端缩放时宠物尺寸不变；边界碰到时向内推，终端客户区小于宠物时隐藏。
 - 左键拖动，松开点击会短暂缩小后恢复。
-- 点击宠物会异步执行当前配置的 curl 并刷新气泡；点击气泡本身不会触发动作。
+- 左键点击宠物会异步执行当前配置的 curl 并刷新气泡；点击气泡本身只切换显示配置。
+- 右键点击宠物或气泡只触发弹跳和 `~/download/Ya1.mp3` 音效，不会刷新请求或切换配置。音效通过 `paplay`、`ffplay` 或 `mpg123` 异步播放，缺少播放器时不影响主程序。
 - 长按宠物约 550ms 会打开显示配置 GUI；也可以从桌面里的 “Codex Pet Settings” 打开。
 - Codex 进程结束时 overlay 只隐藏并继续等待，不退出；下一个匹配的 Codex terminal 出现后会重新显示。
 - 已生成 `processed_assets/pet_transparent.png` 和 `processed_assets/chat_bubble_transparent.png` 去背版本，原始资源不会被改写。去背使用全图黑色背景分类，封闭区域也会被处理，不再只从四角洪水填充。
@@ -61,3 +62,7 @@ GUI 会写入程序目录下的 `codex-pet.json`。旧版本的 `.env` 会在找
 显示模板支持基础运算，例如 `已使用: {$content // 1000}k`。支持 `+`、`-`、`*`、`/`、`//`、`%` 和括号；`//` 是向下取整除法。
 
 当前实现依赖 X11 的 `_NET_CLIENT_LIST`、`_NET_ACTIVE_WINDOW` 和 `_NET_WM_PID`，以及 Cairo/X11 开发包。Wayland 会话需要后续增加对应的 compositor/桌面环境适配。
+
+## 致谢
+
+感谢 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)。本项目的图片生成参考图和点击音效均来源于该项目。

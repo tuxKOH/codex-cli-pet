@@ -14,6 +14,8 @@
 #include <errno.h>
 #include <limits.h>
 #include <poll.h>
+#include <pwd.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,6 +90,8 @@ typedef struct {
     pid_t fetch_pid;
     int fetch_index;
     char fetch_path[PATH_MAX];
+    char sound_path[PATH_MAX];
+    pid_t sound_pid;
     long long press_started;
     int bubble_pressed;
     int long_press_sent;
@@ -547,6 +551,31 @@ static void complete_fetch(App *app) {
     app->fetch_pid = 0;
 }
 
+static void complete_sound(App *app) {
+    int status;
+    if (app->sound_pid <= 0) return;
+    if (waitpid(app->sound_pid, &status, WNOHANG) == app->sound_pid)
+        app->sound_pid = 0;
+}
+
+static void play_sound(App *app) {
+    pid_t child;
+    if (!app->sound_path[0] || access(app->sound_path, R_OK) != 0) return;
+    complete_sound(app);
+    /* Do not stack many copies when the button is clicked repeatedly while
+     * the effect is still playing. The UI thread never waits for audio. */
+    if (app->sound_pid > 0) return;
+    child = fork();
+    if (child == 0) {
+        execlp("paplay", "paplay", app->sound_path, (char *)NULL);
+        execlp("ffplay", "ffplay", "-nodisp", "-autoexit", "-loglevel",
+               "quiet", app->sound_path, (char *)NULL);
+        execlp("mpg123", "mpg123", "-q", app->sound_path, (char *)NULL);
+        _exit(127);
+    }
+    if (child > 0) app->sound_pid = child;
+}
+
 static void update_input_shape(App *app) {
     XRectangle rectangle;
     if (!app->visible) return;
@@ -642,7 +671,20 @@ static void handle_event(App *app, XEvent *event) {
         app->bubble_pressed = event->xbutton.x < 112 && event->xbutton.y < 98;
         // Bubble clicks only change which saved display is shown. Character
         // clicks keep the refresh action; neither action changes bubble size.
-        if (!app->bubble_pressed) start_animation(app);
+        if (!app->bubble_pressed) {
+            start_animation(app);
+            play_sound(app);
+        }
+    } else if (event->type == ButtonPress && event->xbutton.button == Button3) {
+        /* Right click is deliberately action-free: it only gives feedback.
+         * In particular, it must never refresh the current API display or
+         * cycle the bubble configuration. */
+        app->dragging = 0;
+        app->press_started = 0;
+        app->long_press_sent = 1;
+        app->bubble_pressed = 0;
+        start_animation(app);
+        play_sound(app);
     } else if (event->type == MotionNotify && (event->xmotion.state & Button1Mask)) {
         int dx = event->xmotion.x_root - app->press_root_x;
         int dy = event->xmotion.y_root - app->press_root_y;
@@ -677,6 +719,9 @@ static void handle_event(App *app, XEvent *event) {
         app->dragging = 0;
         app->press_started = 0;
         app->bubble_pressed = 0;
+    } else if (event->type == ButtonRelease && event->xbutton.button == Button3) {
+        app->press_started = 0;
+        app->dragging = 0;
     }
 }
 
@@ -780,6 +825,10 @@ static void init_x11(App *app, const char *directory) {
 }
 
 static void destroy_app(App *app) {
+    if (app->sound_pid > 0) {
+        kill(app->sound_pid, SIGTERM);
+        waitpid(app->sound_pid, NULL, 0);
+    }
     if (app->x_surface) cairo_surface_destroy(app->x_surface);
     if (app->back_buffer) cairo_surface_destroy(app->back_buffer);
     if (app->pet_image) cairo_surface_destroy(app->pet_image);
@@ -801,6 +850,12 @@ int main(int argc, char **argv) {
     app.relative_x = 16;
     app.relative_y = 12;
     app.demo = argc > 1 && !strcmp(argv[1], "--demo");
+    {
+        const char *home = getenv("HOME");
+        struct passwd *password = getpwuid(getuid());
+        if (!home || !*home) home = password ? password->pw_dir : ".";
+        snprintf(app.sound_path, sizeof(app.sound_path), "%s/download/Ya1.mp3", home);
+    }
     executable_length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
     if (executable_length <= 0) die("cannot locate executable directory");
     executable[executable_length] = '\0';
@@ -843,6 +898,7 @@ int main(int argc, char **argv) {
         update_long_press(&app);
         update_animation(&app);
         complete_fetch(&app);
+        complete_sound(&app);
         reload_config_if_changed(&app);
         refresh(&app);
     }
