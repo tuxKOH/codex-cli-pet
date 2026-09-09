@@ -84,6 +84,7 @@ typedef struct {
     long long codex_scan_at;
     PetConfig config;
     char config_path[PATH_MAX];
+    char directory[PATH_MAX];
     char bubble_text[PET_CONFIG_VALUE_MAX];
     long long config_check_at;
     time_t config_mtime;
@@ -102,6 +103,8 @@ static long long now_ms(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
 }
+
+static void resolve_sound_path(App *app, const char *directory);
 
 static void die(const char *message) {
     fprintf(stderr, "codex-pet: %s\n", message);
@@ -492,6 +495,7 @@ static void reload_config_if_changed(App *app) {
     if (info.st_mtime != app->config_mtime) {
         int old_active = app->config.active;
         pet_config_load(&app->config, app->config_path);
+        resolve_sound_path(app, app->directory);
         config_update_mtime(app);
         if (app->config.count > 0 && app->config.active != old_active) {
             set_bubble_text(app, app->config.items[app->config.active].value);
@@ -567,13 +571,52 @@ static void play_sound(App *app) {
     if (app->sound_pid > 0) return;
     child = fork();
     if (child == 0) {
+        /* paplay generally cannot decode MP3 files. ffplay handles the
+         * bundled MP3 reliably; the other players remain fallbacks for a
+         * user-configured audio file. */
+        execlp("ffplay", "ffplay", "-nodisp", "-vn", "-autoexit",
+               "-nostdin", "-loglevel", "quiet", app->sound_path,
+               (char *)NULL);
         execlp("paplay", "paplay", app->sound_path, (char *)NULL);
-        execlp("ffplay", "ffplay", "-nodisp", "-autoexit", "-loglevel",
-               "quiet", app->sound_path, (char *)NULL);
         execlp("mpg123", "mpg123", "-q", app->sound_path, (char *)NULL);
         _exit(127);
     }
     if (child > 0) app->sound_pid = child;
+}
+
+static void resolve_sound_path(App *app, const char *directory) {
+    char resolved[PATH_MAX];
+    const char *home;
+    if (!app->config.sound_path[0]) {
+        app->sound_path[0] = '\0';
+        return;
+    }
+    if (app->config.sound_path[0] == '/') {
+        snprintf(app->sound_path, sizeof(app->sound_path), "%s",
+                 app->config.sound_path);
+    } else if (app->config.sound_path[0] == '~' &&
+               app->config.sound_path[1] == '/') {
+        home = getenv("HOME");
+        if (!home || !*home) {
+            struct passwd *password = getpwuid(getuid());
+            home = password ? password->pw_dir : ".";
+        }
+        snprintf(resolved, sizeof(resolved), "%s/%s", home,
+                 app->config.sound_path + 2);
+        snprintf(app->sound_path, sizeof(app->sound_path), "%s", resolved);
+    } else {
+        size_t directory_length = strlen(directory);
+        size_t sound_length = strlen(app->config.sound_path);
+        if (directory_length + 1 + sound_length >= sizeof(resolved)) {
+            app->sound_path[0] = '\0';
+            return;
+        }
+        memcpy(resolved, directory, directory_length);
+        resolved[directory_length] = '/';
+        memcpy(resolved + directory_length + 1, app->config.sound_path,
+               sound_length + 1);
+        memcpy(app->sound_path, resolved, sound_length + directory_length + 2);
+    }
 }
 
 static void update_input_shape(App *app) {
@@ -850,12 +893,6 @@ int main(int argc, char **argv) {
     app.relative_x = 16;
     app.relative_y = 12;
     app.demo = argc > 1 && !strcmp(argv[1], "--demo");
-    {
-        const char *home = getenv("HOME");
-        struct passwd *password = getpwuid(getuid());
-        if (!home || !*home) home = password ? password->pw_dir : ".";
-        snprintf(app.sound_path, sizeof(app.sound_path), "%s/download/Ya1.mp3", home);
-    }
     executable_length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
     if (executable_length <= 0) die("cannot locate executable directory");
     executable[executable_length] = '\0';
@@ -866,8 +903,10 @@ int main(int argc, char **argv) {
         if (slash) *slash = '\0';
         else strcpy(directory, ".");
     }
+    snprintf(app.directory, sizeof(app.directory), "%s", directory);
     snprintf(app.config_path, sizeof(app.config_path), "%s/codex-pet.json", directory);
     pet_config_load(&app.config, app.config_path);
+    resolve_sound_path(&app, directory);
     config_update_mtime(&app);
     if (app.config.count > 0 && app.config.items[app.config.active].value[0])
         snprintf(app.bubble_text, sizeof(app.bubble_text), "%s",

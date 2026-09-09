@@ -29,6 +29,7 @@ INSTALL_DISPLAY=${CODEX_PET_DISPLAY:-${DISPLAY:-:0}}
 INSTALL_XAUTHORITY=${CODEX_PET_XAUTHORITY:-${XAUTHORITY:-/home/$INSTALL_USER/.Xauthority}}
 INSTALL_HOME=$(getent passwd "$INSTALL_USER" | cut -d: -f6)
 INSTALL_GROUP=$(id -gn "$INSTALL_USER")
+INSTALL_UID=$(id -u "$INSTALL_USER")
 SERVICE=/etc/systemd/system/codex-pet.service
 DESKTOP_DIR="$INSTALL_HOME/.local/share/applications"
 DESKTOP="$DESKTOP_DIR/codex-pet-settings.desktop"
@@ -46,6 +47,8 @@ User=$INSTALL_USER
 WorkingDirectory=$APP_DIR
 Environment=DISPLAY=$INSTALL_DISPLAY
 Environment=XAUTHORITY=$INSTALL_XAUTHORITY
+Environment=XDG_RUNTIME_DIR=/run/user/$INSTALL_UID
+Environment=PULSE_SERVER=unix:/run/user/$INSTALL_UID/pulse/native
 ExecStart=$APP_DIR/codex-pet
 Restart=on-failure
 RestartSec=5

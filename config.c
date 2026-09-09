@@ -160,6 +160,10 @@ static int load_json(PetConfig *config, const char *text) {
         if (!strcmp(key, "active")) {
             cursor = cfg_parse_integer(cursor, &config->active);
             if (!cursor) return 0;
+        } else if (!strcmp(key, "sound")) {
+            cursor = cfg_parse_string(cursor, config->sound_path,
+                                      sizeof(config->sound_path));
+            if (!cursor) return 0;
         } else if (!strcmp(key, "displays")) {
             cursor = cfg_skip_space(cursor);
             if (*cursor++ != '[') return 0;
@@ -222,6 +226,7 @@ static int load_env(PetConfig *config, const char *path) {
     char generic_curl_value[PET_CONFIG_CURL_MAX] = "";
     char generic_json[PET_CONFIG_JSON_MAX] = "";
     char generic_template[PET_CONFIG_TEMPLATE_MAX] = "";
+    char generic_sound[PET_CONFIG_SOUND_MAX] = "";
     file = fopen(path, "r");
     if (!file) return 0;
     while (fgets(line, sizeof(line), file)) {
@@ -241,6 +246,7 @@ static int load_env(PetConfig *config, const char *path) {
             copy_text(generic_curl_value, sizeof(generic_curl_value), value); generic_curl = 1;
         } else if (!strcmp(key, "CODEX_PET_JSON")) copy_text(generic_json, sizeof(generic_json), value);
         else if (!strcmp(key, "CODEX_PET_TEMPLATE")) copy_text(generic_template, sizeof(generic_template), value);
+        else if (!strcmp(key, "CODEX_PET_SOUND")) copy_text(generic_sound, sizeof(generic_sound), value);
         else if ((index = suffix_index(key, "CODEX_PET_NAME_")) >= 0)
             copy_text(ensure_item(config, index)->name, PET_CONFIG_NAME_MAX, value);
         else if ((index = suffix_index(key, "CODEX_PET_CURL_")) >= 0)
@@ -259,6 +265,7 @@ static int load_env(PetConfig *config, const char *path) {
         if (generic_json[0]) copy_text(item->json_path, sizeof(item->json_path), generic_json);
         if (generic_template[0]) copy_text(item->template_text, sizeof(item->template_text), generic_template);
     }
+    if (generic_sound[0]) copy_text(config->sound_path, sizeof(config->sound_path), generic_sound);
     if (config->count > 0 && (config->active < 0 || config->active >= config->count)) config->active = 0;
     return 1;
 }
@@ -284,6 +291,7 @@ void pet_config_init(PetConfig *config, const char *path) {
     memset(config, 0, sizeof(*config));
     copy_text(config->path, sizeof(config->path), path ? path : ".env");
     config->active = 0;
+    copy_text(config->sound_path, sizeof(config->sound_path), "assets/Ya1.mp3");
 }
 
 int pet_config_load(PetConfig *config, const char *path) {
@@ -321,7 +329,21 @@ int pet_config_save(const PetConfig *config) {
     int i;
     if (!file) return 0;
     fputs("{\n  \"active\": ", file);
-    fprintf(file, "%d,\n  \"displays\": [\n", config->active);
+    fprintf(file, "%d,\n  \"sound\":\"", config->active);
+    {
+        const unsigned char *cursor = (const unsigned char *)config->sound_path;
+        while (*cursor) {
+            if (*cursor == '\\') fputs("\\\\", file);
+            else if (*cursor == '"') fputs("\\\"", file);
+            else if (*cursor == '\n') fputs("\\n", file);
+            else if (*cursor == '\r') fputs("\\r", file);
+            else if (*cursor == '\t') fputs("\\t", file);
+            else if (*cursor < 0x20) fprintf(file, "\\u%04x", *cursor);
+            else fputc(*cursor, file);
+            cursor++;
+        }
+    }
+    fputs("\",\n  \"displays\": [\n", file);
     for (i = 0; i < config->count; i++) {
         const PetConfigItem *item = &config->items[i];
         const char *values[] = {item->name, item->curl, item->json_path, item->template_text, item->value};

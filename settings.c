@@ -17,6 +17,7 @@ typedef struct {
     GtkWidget *curl_entry;
     GtkWidget *json_entry;
     GtkWidget *template_entry;
+    GtkWidget *sound_entry;
     GtkWidget *active_label;
     GtkWidget *status;
 } Settings;
@@ -40,6 +41,17 @@ static void save_form(Settings *settings) {
     copy_entry(item->template_text, sizeof(item->template_text), settings->template_entry);
 }
 
+static void save_sound(Settings *settings) {
+    if (!settings->loading && settings->sound_entry)
+        copy_entry(settings->config.sound_path, sizeof(settings->config.sound_path),
+                   settings->sound_entry);
+}
+
+static void on_sound_changed(GtkEditable *editable, gpointer user_data) {
+    (void)editable;
+    save_sound(user_data);
+}
+
 static void load_form(Settings *settings) {
     PetConfigItem *item;
     settings->loading = 1;
@@ -55,6 +67,7 @@ static void load_form(Settings *settings) {
         gtk_entry_set_text(GTK_ENTRY(settings->json_entry), item->json_path);
         gtk_entry_set_text(GTK_ENTRY(settings->template_entry), item->template_text);
     }
+    gtk_entry_set_text(GTK_ENTRY(settings->sound_entry), settings->config.sound_path);
     settings->loading = 0;
 }
 
@@ -136,6 +149,7 @@ static void on_add_clicked(GtkButton *button, gpointer user_data) {
     PetConfigItem *item;
     (void)button;
     save_form(settings);
+    save_sound(settings);
     if (settings->config.count >= PET_CONFIG_MAX_ITEMS) return;
     item = &settings->config.items[settings->config.count++];
     memset(item, 0, sizeof(*item));
@@ -174,6 +188,7 @@ static void on_save_clicked(GtkButton *button, gpointer user_data) {
     Settings *settings = user_data;
     (void)button;
     save_form(settings);
+    save_sound(settings);
     if (pet_config_save(&settings->config)) set_status(settings, "已保存到 codex-pet.json");
     else set_status(settings, "保存失败，请检查 JSON 文件权限");
     refresh_active_label(settings);
@@ -255,15 +270,18 @@ static GtkWidget *build_window(Settings *settings) {
     settings->curl_entry = make_entry("curl -s 'https://...'");
     settings->json_entry = make_entry("data.balance 或 {\"data\":{\"balance\":$content}}");
     settings->template_entry = make_entry("余额：$content");
+    settings->sound_entry = make_entry("assets/Ya1.mp3");
     add_labeled_entry(GTK_GRID(grid), 0, "显示名称", settings->name_entry, NULL);
     add_labeled_entry(GTK_GRID(grid), 1, "curl 指令", settings->curl_entry, NULL);
     add_labeled_entry(GTK_GRID(grid), 2, "JSON 解析", settings->json_entry, "留空显示完整返回；支持 data.balance 或 JSON 模板");
     add_labeled_entry(GTK_GRID(grid), 4, "显示模板", settings->template_entry, "$content 会替换成解析后的值");
+    add_labeled_entry(GTK_GRID(grid), 5, "点击音效", settings->sound_entry, "支持绝对路径或相对于程序目录的路径；留空关闭音效");
     gtk_box_pack_start(GTK_BOX(right), grid, FALSE, FALSE, 0);
     g_signal_connect(settings->name_entry, "changed", G_CALLBACK(on_form_changed), settings);
     g_signal_connect(settings->curl_entry, "changed", G_CALLBACK(on_form_changed), settings);
     g_signal_connect(settings->json_entry, "changed", G_CALLBACK(on_form_changed), settings);
     g_signal_connect(settings->template_entry, "changed", G_CALLBACK(on_form_changed), settings);
+    g_signal_connect(settings->sound_entry, "changed", G_CALLBACK(on_sound_changed), settings);
 
     active_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_box_pack_start(GTK_BOX(right), active_row, FALSE, FALSE, 10);

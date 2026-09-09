@@ -9,6 +9,7 @@
 #define PET_CONFIG_JSON_MAX 512
 #define PET_CONFIG_TEMPLATE_MAX 512
 #define PET_CONFIG_VALUE_MAX 2048
+#define PET_CONFIG_SOUND_MAX 4096
 
 typedef struct {
     char name[PET_CONFIG_NAME_MAX];
@@ -20,6 +21,7 @@ typedef struct {
 
 typedef struct {
     char path[4096];
+    char sound_path[PET_CONFIG_SOUND_MAX];
     PetConfigItem items[PET_CONFIG_MAX_ITEMS];
     int count;
     int active;
